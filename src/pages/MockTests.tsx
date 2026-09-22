@@ -2,7 +2,6 @@ import { FormEvent, useState } from 'react';
 import { BookOpen, Loader2, Plus, Trash2, Image as ImageIcon } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../lib/auth-context';
-import { getPlan } from '../lib/pricing';
 import { loadUsage, canCreateMock, TELEGRAM_PAYMENT_URL } from '../lib/subscription';
 import { readFileAsDataUrl } from '../lib/upload';
 
@@ -30,9 +29,16 @@ const emptyQ = (): Q => ({
   correct: 'A',
 });
 
+function errText(err: unknown): string {
+  if (!err) return 'Xato';
+  if (typeof err === 'string') return err;
+  if (err instanceof Error) return err.message;
+  const e = err as { message?: string; details?: string; hint?: string; code?: string };
+  return [e.message, e.details, e.hint, e.code].filter(Boolean).join(' — ') || JSON.stringify(err);
+}
+
 export default function MockTests() {
   const { center, user, subscription, role } = useAuth();
-  const plan = getPlan(subscription?.plan);
   const [title, setTitle] = useState('');
   const [subjectId, setSubjectId] = useState('physics');
   const [duration, setDuration] = useState(60);
@@ -41,14 +47,15 @@ export default function MockTests() {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
-  const canCreate = role === 'owner' || role === 'admin' || role === 'teacher';
+  const canCreate =
+    role === 'owner' || role === 'admin' || role === 'administrator' || role === 'teacher';
 
   if (!canCreate) {
     return (
       <div className="students-page">
         <div className="empty-state">
-          <h3>Ruxsat yo‘q</h3>
-          <p>Mock testni faqat o‘qituvchi yoki markaz egasi yaratadi.</p>
+          <h3>Ruxsat yoq</h3>
+          <p>Mock testni faqat oqituvchi yoki markaz egasi yaratadi.</p>
         </div>
       </div>
     );
@@ -61,6 +68,10 @@ export default function MockTests() {
   const onImage = async (i: number, file: File | null) => {
     if (!file) return;
     try {
+      if (file.size > 800_000) {
+        setError('Rasm 800KB dan kichik bolsin');
+        return;
+      }
       const data = await readFileAsDataUrl(file);
       updateQ(i, { image_data: data });
     } catch (e) {
@@ -78,14 +89,15 @@ export default function MockTests() {
       const usageSnap = await loadUsage(center.id, subscription);
       const mockCheck = canCreateMock(usageSnap);
       if (!mockCheck.ok) throw new Error(mockCheck.reason || 'Mock limit');
+
       for (const q of questions) {
-        if (q.mode === 'choice' && !q.prompt.trim()) throw new Error('Har bir savolda matn bo‘lsin');
-        if (q.mode === 'choice' && (!q.optA.trim() || !q.optB.trim())) {
-          throw new Error('Kamida A va B variantlarini to‘ldiring');
-        }
+        if (q.mode === 'choice' && !q.prompt.trim()) throw new Error('Har bir savolda matn bolsin');
         if (q.mode === 'image' && !q.image_data) throw new Error('Rasmli savol uchun rasm yuklang');
+        if (!q.optA.trim() || !q.optB.trim()) throw new Error('Har bir savolda kamida A va B variantlarini toldiring');
       }
+
       const maxScore = questions.reduce((s, q) => s + Number(q.points || 0), 0);
+
       const { data: test, error: tErr } = await supabase
         .from('mock_tests')
         .insert({
@@ -101,51 +113,59 @@ export default function MockTests() {
         .single();
       if (tErr || !test) throw tErr || new Error('Test yaratilmadi');
 
-      const { data: sec } = await supabase
+      let sectionId: string | null = null;
+      const { data: sec, error: secErr } = await supabase
         .from('mock_test_sections')
         .insert({ test_id: test.id, code: 'general', title: 'Umumiy', sort_order: 1 })
         .select('id')
         .single();
+      if (!secErr && sec?.id) sectionId = sec.id;
 
       for (let i = 0; i < questions.length; i++) {
         const q = questions[i];
+        const prompt = q.prompt.trim() || (q.mode === 'image' ? 'Rasmli savol' : 'Savol ' + (i + 1));
+
+        const insertPayload: Record<string, unknown> = {
+          test_id: test.id,
+          question_type: q.mode === 'image' ? 'image_question' : 'single_choice',
+          prompt,
+          image_path: q.image_data || null,
+          points: Number(q.points) || 1,
+          sort_order: i + 1,
+        };
+        if (sectionId) insertPayload.section_id = sectionId;
+
         const { data: row, error: qErr } = await supabase
           .from('mock_questions')
-          .insert({
-            test_id: test.id,
-            section_id: sec?.id,
-            question_type: q.mode === 'image' ? 'image_question' : 'single_choice',
-            prompt: q.prompt.trim() || (q.mode === 'image' ? 'Rasmli savol' : ''),
-            image_url: q.image_data || null,
-            points: q.points,
-            sort_order: i + 1,
-          })
+          .insert(insertPayload)
           .select('id')
           .single();
         if (qErr || !row) throw qErr || new Error('Savol saqlanmadi');
 
-        if (q.mode === 'choice') {
-          const opts = [
-            { label: q.optA, key: 'A' },
-            { label: q.optB, key: 'B' },
-            { label: q.optC, key: 'C' },
-            { label: q.optD, key: 'D' },
-          ].filter((o) => o.label.trim());
-          for (let j = 0; j < opts.length; j++) {
-            await supabase.from('mock_question_options').insert({
-              question_id: row.id,
-              label: opts[j].label.trim(),
-              is_correct: opts[j].key === q.correct,
-              sort_order: j + 1,
-            });
-          }
+        const opts = [
+          { label: q.optA, key: 'A' },
+          { label: q.optB, key: 'B' },
+          { label: q.optC, key: 'C' },
+          { label: q.optD, key: 'D' },
+        ].filter((o) => o.label.trim());
+
+        for (let j = 0; j < opts.length; j++) {
+          const o = opts[j];
+          const { error: oErr } = await supabase.from('mock_question_options').insert({
+            question_id: row.id,
+            label: o.label.trim(),
+            is_correct: q.correct === o.key,
+            sort_order: j + 1,
+          });
+          if (oErr) throw oErr;
         }
       }
+
       setCode(test.public_code || test.id);
       setTitle('');
       setQuestions([emptyQ()]);
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Xato');
+    } catch (err) {
+      setError(errText(err));
     } finally {
       setBusy(false);
     }
@@ -153,36 +173,29 @@ export default function MockTests() {
 
   return (
     <div className="students-page">
-      <div className="students-page__header">
+      <div className="page-header">
         <div>
-          <div className="students-page__eyebrow">Mock test</div>
-          <h1>Yangi test yaratish</h1>
-          <p className="students-page__count">
-            Oyiga lim: {plan.maxMockTestsMonth}. Savol yozing → 4 ta variant (A–D) → to‘g‘ri javobni tanlang.
-          </p>
+          <h1 className="page-title">Mock test yaratish</h1>
+          <p className="page-subtitle">Test saqlanganda kod beriladi. Oquvchilar Velia Mock da shu kod bilan topadi.</p>
         </div>
       </div>
 
-      {error && <p className="input-error-msg" role="alert">{error}</p>}
       {code && (
-        <div className="card" style={{ padding: 14, marginBottom: 12 }}>
-          Test yaratildi. Kod: <strong>{code}</strong>
-          <div className="muted" style={{ marginTop: 6, fontSize: 13 }}>
-            O‘quvchilar Velia Mock dasturida shu kod bilan testni topadi.
-          </div>
+        <div className="card" style={{ marginBottom: 16 }}>
+          <strong>Test kodi: {code}</strong>
+          <p style={{ margin: '8px 0 0' }}>
+            Oquvchilarga shu kodni bering. Limit:{' '}
+            <a href={TELEGRAM_PAYMENT_URL} target="_blank" rel="noreferrer">tolov</a>
+          </p>
         </div>
       )}
 
-      <form className="card" onSubmit={submit} style={{ display: 'grid', gap: 16, padding: 18 }}>
+      <form className="card" onSubmit={submit} style={{ display: 'grid', gap: 16, padding: 20 }}>
+        {error && <div className="error" style={{ whiteSpace: 'pre-wrap' }}>{error}</div>}
+
         <div className="input-group">
           <label className="input-label">1. Test nomi</label>
-          <input
-            className="input"
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            placeholder="Masalan: Fizika 1-chorak mock"
-            required
-          />
+          <input className="input" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Masalan: Fizika mock" required />
         </div>
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
@@ -200,33 +213,18 @@ export default function MockTests() {
           </div>
           <div className="input-group">
             <label className="input-label">3. Vaqt (daqiqa)</label>
-            <input
-              className="input"
-              type="number"
-              min={5}
-              max={300}
-              value={duration}
-              onChange={(e) => setDuration(Number(e.target.value) || 60)}
-            />
+            <input className="input" type="number" min={5} max={300} value={duration} onChange={(e) => setDuration(Number(e.target.value) || 60)} />
           </div>
         </div>
 
         <div>
           <strong style={{ display: 'block', marginBottom: 10 }}>4. Savollar</strong>
           {questions.map((q, i) => (
-            <div
-              key={i}
-              className="card"
-              style={{ padding: 14, display: 'grid', gap: 10, marginBottom: 12, background: 'var(--color-surface-2, transparent)' }}
-            >
+            <div key={i} className="card" style={{ padding: 14, display: 'grid', gap: 10, marginBottom: 12 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <strong>Savol {i + 1}</strong>
                 {questions.length > 1 && (
-                  <button
-                    type="button"
-                    className="btn btn-ghost"
-                    onClick={() => setQuestions((arr) => arr.filter((_, j) => j !== i))}
-                  >
+                  <button type="button" className="btn btn-ghost" onClick={() => setQuestions((arr) => arr.filter((_, j) => j !== i))}>
                     <Trash2 size={16} />
                   </button>
                 )}
@@ -234,96 +232,64 @@ export default function MockTests() {
 
               <div className="input-group">
                 <label className="input-label">Tur</label>
-                <select
-                  className="input"
-                  value={q.mode}
-                  onChange={(e) => updateQ(i, { mode: e.target.value as 'choice' | 'image' })}
-                >
-                  <option value="choice">Matn + 4 variant (A B C D)</option>
-                  <option value="image">Rasmli savol (kompyuterdan)</option>
+                <select className="input" value={q.mode} onChange={(e) => updateQ(i, { mode: e.target.value as 'choice' | 'image' })}>
+                  <option value="choice">Matn + 4 variant</option>
+                  <option value="image">Rasm + 4 variant</option>
                 </select>
               </div>
 
               {q.mode === 'choice' ? (
-                <>
-                  <div className="input-group">
-                    <label className="input-label">Savol matni</label>
-                    <textarea
-                      className="input"
-                      rows={2}
-                      value={q.prompt}
-                      onChange={(e) => updateQ(i, { prompt: e.target.value })}
-                      placeholder="Savolni yozing..."
-                      required
-                    />
-                  </div>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-                    {(['A', 'B', 'C', 'D'] as const).map((key) => (
-                      <div className="input-group" key={key}>
-                        <label className="input-label">Variant {key}</label>
-                        <input
-                          className="input"
-                          value={q[`opt${key}` as 'optA' | 'optB' | 'optC' | 'optD']}
-                          onChange={(e) => updateQ(i, { [`opt${key}`]: e.target.value } as Partial<Q>)}
-                          placeholder={key === 'A' || key === 'B' ? 'Majburiy' : 'Ixtiyoriy'}
-                          required={key === 'A' || key === 'B'}
-                        />
-                      </div>
-                    ))}
-                  </div>
-                  <div className="input-group">
-                    <label className="input-label">To‘g‘ri javob</label>
-                    <select
-                      className="input"
-                      value={q.correct}
-                      onChange={(e) => updateQ(i, { correct: e.target.value as Q['correct'] })}
-                    >
-                      <option value="A">A</option>
-                      <option value="B">B</option>
-                      <option value="C">C</option>
-                      <option value="D">D</option>
-                    </select>
-                  </div>
-                </>
+                <div className="input-group">
+                  <label className="input-label">Savol matni</label>
+                  <textarea className="input" rows={2} value={q.prompt} onChange={(e) => updateQ(i, { prompt: e.target.value })} required />
+                </div>
               ) : (
                 <div className="input-group">
-                  <label className="input-label">
-                    <ImageIcon size={14} /> Rasm yuklash
-                  </label>
-                  <input
-                    className="input"
-                    type="file"
-                    accept="image/*"
-                    onChange={(e) => void onImage(i, e.target.files?.[0] || null)}
-                  />
-                  {q.image_data && (
-                    <img
-                      src={q.image_data}
-                      alt="Savol"
-                      style={{ maxWidth: 220, marginTop: 8, borderRadius: 8 }}
-                    />
-                  )}
+                  <label className="input-label"><ImageIcon size={14} /> Rasm yuklash</label>
+                  <input className="input" type="file" accept="image/*" onChange={(e) => void onImage(i, e.target.files?.[0] || null)} />
+                  {q.image_data && <img src={q.image_data} alt="Savol" style={{ maxWidth: 220, marginTop: 8, borderRadius: 8 }} />}
+                  <input className="input" style={{ marginTop: 8 }} value={q.prompt} onChange={(e) => updateQ(i, { prompt: e.target.value })} placeholder="Savol matni (ixtiyoriy)" />
                 </div>
               )}
 
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                {(['A', 'B', 'C', 'D'] as const).map((key) => (
+                  <div className="input-group" key={key}>
+                    <label className="input-label">Variant {key}</label>
+                    <input
+                      className="input"
+                      value={key === 'A' ? q.optA : key === 'B' ? q.optB : key === 'C' ? q.optC : q.optD}
+                      onChange={(e) =>
+                        updateQ(
+                          i,
+                          key === 'A' ? { optA: e.target.value } : key === 'B' ? { optB: e.target.value } : key === 'C' ? { optC: e.target.value } : { optD: e.target.value }
+                        )
+                      }
+                      placeholder={key === 'A' || key === 'B' ? 'Majburiy' : 'Ixtiyoriy'}
+                      required={key === 'A' || key === 'B'}
+                    />
+                  </div>
+                ))}
+              </div>
+
+              <div className="input-group">
+                <label className="input-label">Togri javob</label>
+                <select className="input" value={q.correct} onChange={(e) => updateQ(i, { correct: e.target.value as Q['correct'] })}>
+                  <option value="A">A</option>
+                  <option value="B">B</option>
+                  <option value="C">C</option>
+                  <option value="D">D</option>
+                </select>
+              </div>
+
               <div className="input-group">
                 <label className="input-label">Ball</label>
-                <input
-                  className="input"
-                  type="number"
-                  min={1}
-                  value={q.points}
-                  onChange={(e) => updateQ(i, { points: Number(e.target.value) || 1 })}
-                />
+                <input className="input" type="number" min={1} value={q.points} onChange={(e) => updateQ(i, { points: Number(e.target.value) || 1 })} />
               </div>
             </div>
           ))}
 
-          <button
-            type="button"
-            className="btn btn-secondary"
-            onClick={() => setQuestions((q) => [...q, emptyQ()])}
-          >
+          <button type="button" className="btn btn-secondary" onClick={() => setQuestions((q) => [...q, emptyQ()])}>
             <Plus size={16} /> Yana savol
           </button>
         </div>
