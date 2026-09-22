@@ -37,18 +37,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const loadUserData = async (userId: string) => {
     try {
-      const { data: profileData } = await supabase
+      let { data: profileData } = await supabase
         .from('profiles')
         .select('*')
         .eq('id', userId)
-        .single();
+        .maybeSingle();
+
+      if (!profileData) {
+        const { data: authUser } = await supabase.auth.getUser();
+        const email = authUser.user?.email || '';
+        const fullName =
+          (authUser.user?.user_metadata?.full_name as string) ||
+          email.split('@')[0] ||
+          'User';
+        await supabase.from('profiles').upsert({
+          id: userId,
+          email,
+          full_name: fullName,
+        });
+        const again = await supabase.from('profiles').select('*').eq('id', userId).maybeSingle();
+        profileData = again.data;
+      }
 
       if (profileData) {
         setProfile(profileData);
         if (profileData.preferred_language) {
           localStorage.setItem('velia_lang', profileData.preferred_language);
         }
-        // Theme: prefer local choice (instant UX), fallback to profile
         const localTheme = localStorage.getItem('velia_theme');
         const themeToApply =
           localTheme === 'dark' || localTheme === 'light'
@@ -72,12 +87,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           : memberData.centers;
         setCenter(c as Center);
 
-        const { data: subData } = await supabase
+        let { data: subData } = await supabase
           .from('center_subscriptions')
           .select('*')
           .eq('center_id', (c as Center).id)
-          .single();
-        if (subData) setSubscription(subData);
+          .maybeSingle();
+
+        if (!subData) {
+          const { data: alt } = await supabase
+            .from('subscriptions')
+            .select('*')
+            .eq('center_id', (c as Center).id)
+            .maybeSingle();
+          if (alt) {
+            subData = {
+              id: alt.id,
+              center_id: alt.center_id,
+              plan: alt.plan_id || alt.plan || 'start',
+              student_limit: alt.student_limit_override ?? alt.student_limit ?? null,
+              started_at: alt.started_at,
+              expires_at: alt.expires_at,
+              created_at: alt.created_at,
+              updated_at: alt.updated_at,
+            } as CenterSubscription;
+          }
+        }
+
+        if (subData) setSubscription(subData as CenterSubscription);
       }
     } catch (err) {
       console.error('Failed to load user data', err);
@@ -90,8 +126,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     supabase.auth.getSession().then(async ({ data: { session: s }, error }) => {
-      // A password reset or a replaced browser session can leave an obsolete
-      // refresh token in localStorage. Remove only that local auth state.
       if (error) await supabase.auth.signOut({ scope: 'local' });
       setSession(s);
       setUser(s?.user ?? null);
