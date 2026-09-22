@@ -4,6 +4,7 @@ import { useAuth } from '../../lib/auth-context';
 import Sidebar from './Sidebar';
 import Header from './Header';
 import BottomNav from './BottomNav';
+import AnnouncementModal from '../AnnouncementModal';
 
 export default function AppLayout() {
   const { signOut } = useAuth();
@@ -28,6 +29,7 @@ export default function AppLayout() {
       </div>
 
       <BottomNav />
+      <AnnouncementModal />
     </div>
   );
 }
