@@ -1,0 +1,12 @@
+<svg viewBox="0 0 260 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="g" x1="4" y1="4" x2="60" y2="60" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#3B82F6"/>
+      <stop offset="40%" stop-color="#6366F1"/>
+      <stop offset="100%" stop-color="#7C3AED"/>
+    </linearGradient>
+  </defs>
+  <path fill="url(#g)" d="M6.5 10.5C6.5 6.2 11.2 4.4 14.8 7.2L30.5 28.5L46.2 7.2C49.8 4.4 54.5 6.2 54.5 10.5L54.5 16.2L34.8 52.5C32.9 55.8 28.1 55.8 26.2 52.5L6.5 16.2Z"/>
+  <path fill="#fff" fill-opacity="0.15" d="M18 14L30.5 32L43 14L37.5 14L30.5 24.5L23.5 14Z"/>
+  <text x="72" y="44" font-family="Inter, system-ui, sans-serif" font-size="38" font-weight="700" letter-spacing="-0.035em" fill="#0f172a">velia</text>
+</svg>
