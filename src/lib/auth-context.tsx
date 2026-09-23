@@ -50,11 +50,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           (authUser.user?.user_metadata?.full_name as string) ||
           email.split('@')[0] ||
           'User';
-        await supabase.from('profiles').upsert({
+        await supabase.rpc('ensure_own_profile', { p_full_name: fullName, p_email: email });
+        const { error: upsertErr } = await supabase.from('profiles').upsert({
           id: userId,
           email,
           full_name: fullName,
         });
+        if (upsertErr) console.warn('profiles upsert', upsertErr.message);
         const again = await supabase.from('profiles').select('*').eq('id', userId).maybeSingle();
         profileData = again.data;
       }

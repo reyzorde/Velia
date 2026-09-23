@@ -447,6 +447,7 @@ export default function Signup() {
                 <input
                   id="password"
                   type={showPassword ? 'text' : 'password'}
+                  autoComplete="new-password"
                   className={`input ${fieldErrors.password ? 'input-error' : ''}`}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
@@ -471,6 +472,7 @@ export default function Signup() {
               <input
                 id="confirmPassword"
                 type="password"
+                autoComplete="new-password"
                 className={`input ${fieldErrors.confirmPassword ? 'input-error' : ''}`}
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}

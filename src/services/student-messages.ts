@@ -16,7 +16,6 @@ export interface SendMessagePayload {
   sent_by?: string | null;
 }
 
-// Local cache in case table is not yet migrated in Supabase
 const localMessageHistoryKey = 'velia_local_messages';
 
 function getLocalMessages(): StudentMessage[] {
@@ -32,90 +31,85 @@ function saveLocalMessage(msg: StudentMessage) {
   try {
     const list = getLocalMessages();
     list.unshift(msg);
-    localStorage.setItem(localMessageHistoryKey, JSON.stringify(list.slice(0, 100)));
+    localStorage.setItem(localMessageHistoryKey, JSON.stringify(list.slice(0, 200)));
   } catch {
-    // ignore
+    /* ignore */
   }
 }
 
-export async function saveMessageRecord(payload: SendMessagePayload): Promise<StudentMessage> {
-  const fallbackMessage: StudentMessage = {
-    id: `local-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+function toRow(payload: SendMessagePayload) {
+  return {
     center_id: payload.center_id,
-    student_id: payload.student_id ?? null,
-    group_id: payload.group_id ?? null,
+    student_id: payload.student_id || null,
+    group_id: payload.group_id || null,
     recipient_name: payload.recipient_name,
-    recipient_phone: payload.recipient_phone ?? null,
-    recipient_email: payload.recipient_email ?? null,
-    channel: payload.channel,
+    recipient_phone: payload.recipient_phone || null,
+    recipient_email: payload.recipient_email || null,
+    channel: payload.channel || 'in_app',
     message_type: payload.message_type,
-    title: payload.title ?? null,
+    title: payload.title || null,
     content: payload.content,
-    status: payload.status ?? 'sent',
-    sent_by: payload.sent_by ?? null,
-    created_at: new Date().toISOString(),
+    status: payload.status || 'sent',
+    sent_by: payload.sent_by || null,
   };
+}
 
-  try {
-    const { data, error } = await supabase
-      .from('student_messages')
-      .insert({
-        center_id: payload.center_id,
-        student_id: payload.student_id || null,
-        group_id: payload.group_id || null,
-        recipient_name: payload.recipient_name,
-        recipient_phone: payload.recipient_phone || null,
-        recipient_email: payload.recipient_email || null,
-        channel: payload.channel,
-        message_type: payload.message_type,
-        title: payload.title || null,
-        content: payload.content,
-        status: payload.status || 'sent',
-        sent_by: payload.sent_by || null,
-      })
-      .select()
-      .single();
+function localFromPayload(payload: SendMessagePayload): StudentMessage {
+  return {
+    id: `local-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    ...toRow(payload),
+    created_at: new Date().toISOString(),
+  } as StudentMessage;
+}
 
-    if (!error && data) {
-      return data as StudentMessage;
-    }
-  } catch (err) {
-    console.warn('Supabase student_messages unavailable, using local store:', err);
+export async function saveMessageRecord(payload: SendMessagePayload): Promise<StudentMessage> {
+  const { data, error } = await supabase.from('student_messages').insert(toRow(payload)).select().single();
+  if (!error && data) return data as StudentMessage;
+
+  const msg = error?.message || '';
+  if (error && (error.code === '42P01' || /does not exist|schema cache/i.test(msg))) {
+    const fallback = localFromPayload(payload);
+    saveLocalMessage(fallback);
+    return fallback;
   }
+  throw new Error(msg || 'Xabar saqlanmadi. FIX_RLS_NOW.sql ni Supabase da ishga tushiring.');
+}
 
-  saveLocalMessage(fallbackMessage);
-  return fallbackMessage;
+export async function saveMessageBatch(payloads: SendMessagePayload[]): Promise<StudentMessage[]> {
+  if (!payloads.length) return [];
+  const rows = payloads.map(toRow);
+  const { data, error } = await supabase.from('student_messages').insert(rows).select();
+  if (!error && data) return data as StudentMessage[];
+
+  const msg = error?.message || '';
+  if (error && (error.code === '42P01' || /does not exist|schema cache/i.test(msg))) {
+    const local = payloads.map(localFromPayload);
+    local.forEach(saveLocalMessage);
+    return local;
+  }
+  throw new Error(msg || 'Xabarlar saqlanmadi');
 }
 
 export async function fetchMessageHistory(
   centerId: string,
-  limit = 50,
+  limit = 80,
   studentId?: string
 ): Promise<StudentMessage[]> {
-  try {
-    let query = supabase
-      .from('student_messages')
-      .select('*')
-      .eq('center_id', centerId)
-      .order('created_at', { ascending: false })
-      .limit(limit);
+  let query = supabase
+    .from('student_messages')
+    .select('*')
+    .eq('center_id', centerId)
+    .order('created_at', { ascending: false })
+    .limit(limit);
 
-    if (studentId) {
-      query = query.eq('student_id', studentId);
-    }
+  if (studentId) query = query.eq('student_id', studentId);
 
-    const { data, error } = await query;
-    if (!error && data && data.length > 0) {
-      return data as StudentMessage[];
-    }
-  } catch {
-    // fallback to local storage
-  }
+  const { data, error } = await query;
+  if (!error && data) return data as StudentMessage[];
 
-  const local = getLocalMessages().filter(
-    (m) => m.center_id === centerId && (!studentId || m.student_id === studentId)
-  );
-  return local.slice(0, limit);
+  return getLocalMessages()
+    .filter((m) => m.center_id === centerId && (!studentId || m.student_id === studentId))
+    .slice(0, limit);
 }
 
 export function cleanPhoneNumber(phone?: string | null): string {
@@ -123,21 +117,15 @@ export function cleanPhoneNumber(phone?: string | null): string {
   return phone.replace(/[^\d+]/g, '');
 }
 
-/**
- * Dispatches the message to external channel application (SMS, Telegram, WhatsApp, Email).
- */
 export function dispatchToChannel(
   _channel: MessageChannel,
   _contact: { phone?: string | null; email?: string | null },
   _content: string,
   _title?: string
 ) {
-  // Faqat ilova ichida saqlanadi — tashqi dastur ochilmaydi
+  /* in-app only */
 }
 
-/**
- * Standard quick message templates in Uzbek, Russian, English
- */
 export function getMessageTemplates(locale: string = 'uz') {
   if (locale.startsWith('ru')) {
     return [
@@ -205,7 +193,6 @@ export function getMessageTemplates(locale: string = 'uz') {
     ];
   }
 
-  // Default Uzbek
   return [
     {
       id: 'debt',

@@ -4,49 +4,46 @@ import {
   Send,
   MessageSquare,
   Sparkles,
-  Phone,
-  Mail,
-  Users,
-  AlertCircle,
   Clock,
-  ExternalLink,
   Loader2,
   RefreshCw,
   Search,
+  AlertCircle,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../lib/auth-context';
-import { loadUsage, canSendMessage, TELEGRAM_PAYMENT_URL, type UsageSnapshot } from '../lib/subscription';
+import { loadUsage, canSendMessage, type UsageSnapshot } from '../lib/subscription';
 import { useToast } from '../lib/toast-context';
 import { getCenterDebtors } from '../lib/debt';
-import type { Student, Group, StudentMessage, MessageChannel, MessageType } from '../types/database';
+import type { Student, Group, StudentMessage, MessageType } from '../types/database';
 import {
   saveMessageRecord,
+  saveMessageBatch,
   fetchMessageHistory,
-  dispatchToChannel,
   getMessageTemplates,
-  cleanPhoneNumber,
+  type SendMessagePayload,
 } from '../services/student-messages';
 import { generateStudentMessage } from '../services/gemini';
 
+type Debtor = { student_id: string; full_name: string; debt: number; paid: number; expected: number };
+
 export default function Messages() {
   const { t, i18n } = useTranslation();
-  const { center, subscription } = useAuth();
+  const { center, subscription, user } = useAuth();
   const { toast } = useToast();
   const [usage, setUsage] = useState<UsageSnapshot | null>(null);
 
   const [students, setStudents] = useState<Student[]>([]);
   const [groups, setGroups] = useState<Group[]>([]);
-  const [debtors, setDebtors] = useState<any[]>([]);
+  const [debtors, setDebtors] = useState<Debtor[]>([]);
   const [history, setHistory] = useState<StudentMessage[]>([]);
   const [loading, setLoading] = useState(true);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [pageError, setPageError] = useState('');
 
-  // Form State
   const [targetType, setTargetType] = useState<'single' | 'group' | 'debtors' | 'all'>('single');
   const [selectedStudentId, setSelectedStudentId] = useState('');
   const [selectedGroupId, setSelectedGroupId] = useState('');
-  const [channel] = useState<MessageChannel>('in_app');
   const [messageType, setMessageType] = useState<MessageType>('debt_reminder');
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
@@ -54,28 +51,32 @@ export default function Messages() {
   const [sending, setSending] = useState(false);
   const [searchHistory, setSearchHistory] = useState('');
 
-  // Initial load
   useEffect(() => {
     if (!center?.id) return;
     let cancelled = false;
 
     async function loadData() {
       setLoading(true);
+      setPageError('');
       try {
-        const [{ data: sData }, { data: gData }, debtList, hist] = await Promise.all([
+        const [{ data: sData, error: sErr }, { data: gData }, debtList, hist, usageSnap] = await Promise.all([
           supabase.from('students').select('*').eq('center_id', center!.id).order('full_name'),
           supabase.from('groups').select('*').eq('center_id', center!.id).eq('status', 'active'),
           getCenterDebtors(center!.id),
           fetchMessageHistory(center!.id),
+          loadUsage(center!.id, subscription),
         ]);
 
         if (cancelled) return;
+        if (sErr) setPageError(sErr.message);
         setStudents((sData as Student[]) || []);
         setGroups((gData as Group[]) || []);
-        setDebtors(debtList || []);
+        setDebtors((debtList as Debtor[]) || []);
         setHistory(hist);
+        setUsage(usageSnap);
       } catch (err) {
         console.error('Failed to load message data', err);
+        setPageError(err instanceof Error ? err.message : 'Yuklash xatosi');
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -85,7 +86,7 @@ export default function Messages() {
     return () => {
       cancelled = true;
     };
-  }, [center?.id]);
+  }, [center?.id, subscription]);
 
   const refreshHistory = async () => {
     if (!center?.id) return;
@@ -93,45 +94,40 @@ export default function Messages() {
     try {
       const hist = await fetchMessageHistory(center.id);
       setHistory(hist);
+      const snap = await loadUsage(center.id, subscription);
+      setUsage(snap);
     } finally {
       setHistoryLoading(false);
     }
   };
 
-  const selectedStudent = useMemo(() => {
-    return students.find((s) => s.id === selectedStudentId);
-  }, [students, selectedStudentId]);
+  const selectedStudent = useMemo(
+    () => students.find((s) => s.id === selectedStudentId),
+    [students, selectedStudentId]
+  );
 
-  const selectedDebtor = useMemo(() => {
-    return debtors.find(
-      (d) =>
-        d?.student_id === selectedStudentId ||
-        d?.student?.id === selectedStudentId
-    );
-  }, [debtors, selectedStudentId]);
+  const selectedDebtor = useMemo(
+    () => debtors.find((d) => d.student_id === selectedStudentId),
+    [debtors, selectedStudentId]
+  );
 
-  const templates = useMemo(() => {
-    return getMessageTemplates(i18n.language);
-  }, [i18n.language]);
+  const templates = useMemo(() => getMessageTemplates(i18n.language), [i18n.language]);
 
   const applyTemplate = (templateId: string) => {
     const item = templates.find((tmp) => tmp.id === templateId);
     if (!item) return;
-
     setMessageType(item.type);
-    const studentName = selectedStudent?.full_name || 'O‘quvchi';
+    const studentName = selectedStudent?.full_name || "O‘quvchi";
     const centerName = center?.name || 'Velia';
     const amount = selectedDebtor ? selectedDebtor.debt.toLocaleString() : '100,000';
-
     setContent(item.template(studentName, centerName, amount));
   };
 
   const handleAiGenerate = async () => {
     if (!center?.name) return;
     setGeneratingAi(true);
-
     try {
-      const studentName = selectedStudent?.full_name || (targetType === 'group' ? 'O‘quvchilar' : 'O‘quvchi');
+      const studentName = selectedStudent?.full_name || (targetType === 'group' ? "O‘quvchilar" : "O‘quvchi");
       const text = await generateStudentMessage({
         studentName,
         centerName: center.name,
@@ -139,7 +135,6 @@ export default function Messages() {
         debt: selectedDebtor?.debt,
         locale: i18n.language,
       });
-
       setContent(text);
       toast(t('common.success'));
     } catch {
@@ -149,117 +144,130 @@ export default function Messages() {
     }
   };
 
+  const assertLimit = (count: number) => {
+    if (!usage) return;
+    const check = canSendMessage(usage);
+    if (!check.ok) throw new Error(check.reason);
+    const max = usage.plan.maxMessagesDay;
+    if (max != null && max < 999999 && usage.messagesUsedDay + count > max) {
+      throw new Error(`Bugungi xabar limiti: ${max}. ${count} ta yuborib bo‘lmaydi.`);
+    }
+  };
+
   const handleSend = async (e: FormEvent) => {
     e.preventDefault();
     if (!content.trim() || !center?.id) return;
-
     setSending(true);
+    setPageError('');
     try {
+      const base = {
+        center_id: center.id,
+        channel: 'in_app' as const,
+        message_type: messageType,
+        title: title.trim() || null,
+        content: content.trim(),
+        sent_by: user?.id || null,
+      };
+
       if (targetType === 'single') {
         if (!selectedStudent) {
           toast(t('messages.selectStudent'), 'error');
-          setSending(false);
           return;
         }
-
+        assertLimit(1);
         const saved = await saveMessageRecord({
-          center_id: center.id,
+          ...base,
           student_id: selectedStudent.id,
           recipient_name: selectedStudent.full_name,
           recipient_phone: selectedStudent.phone,
           recipient_email: selectedStudent.email,
-          channel,
-          message_type: messageType,
-          title: title.trim() || null,
-          content: content.trim(),
         });
-
-        dispatchToChannel(
-          channel,
-          { phone: selectedStudent.phone, email: selectedStudent.email },
-          content.trim(),
-          title.trim()
-        );
-
         setHistory((prev) => [saved, ...prev]);
-        toast(t('common.success'));
+        toast('Xabar o‘quvchi panelida ko‘rinadi');
       } else if (targetType === 'debtors') {
         if (debtors.length === 0) {
           toast('Qarzdorlar mavjud emas', 'info');
-          setSending(false);
           return;
         }
-
-        for (const item of debtors) {
-          const personalizedContent = content.replace(
-            /\[O'quvchi\]|\{name\}/gi,
-            item.student.full_name
-          );
-
-          const saved = await saveMessageRecord({
-            center_id: center.id,
-            student_id: item.student.id,
-            recipient_name: item.student.full_name,
-            recipient_phone: item.student.phone,
-            recipient_email: item.student.email,
-            channel,
-            message_type: 'debt_reminder',
-            title: title.trim() || null,
-            content: personalizedContent,
-          });
-
-          setHistory((prev) => [saved, ...prev]);
-        }
-
-        // Open channel for first debtor as immediate action
-        if (debtors[0]) {
-          dispatchToChannel(
-            channel,
-            { phone: debtors[0].student.phone, email: debtors[0].student.email },
-            content.trim(),
-            title.trim()
-          );
-        }
-
-        toast(`${debtors.length} ta qarzdorga xabarlar saqlandi va jo'natildi!`);
+        assertLimit(debtors.length);
+        const payloads: SendMessagePayload[] = debtors.map((item) => ({
+          ...base,
+          message_type: 'debt_reminder',
+          student_id: item.student_id,
+          recipient_name: item.full_name,
+          content: content.replace(/\[O'quvchi\]|\{name\}/gi, item.full_name),
+        }));
+        const saved = await saveMessageBatch(payloads);
+        setHistory((prev) => [...saved, ...prev]);
+        toast(`${saved.length} ta qarzdorga xabar yuborildi`);
       } else if (targetType === 'group') {
-        const grp = groups.find((g) => g.id === selectedGroupId);
-        const groupTitle = grp ? grp.name : 'Guruh';
+        if (!selectedGroupId) {
+          toast(t('messages.selectGroup'), 'error');
+          return;
+        }
+        const { data: members, error: mErr } = await supabase
+          .from('group_students')
+          .select('student_id, students(id, full_name, phone, email)')
+          .eq('group_id', selectedGroupId)
+          .eq('status', 'active');
+        if (mErr) throw mErr;
+        const list = (members || [])
+          .map((row: any) => {
+            const st = Array.isArray(row.students) ? row.students[0] : row.students;
+            return st as { id: string; full_name: string; phone?: string | null; email?: string | null } | null;
+          })
+          .filter(Boolean) as Array<{ id: string; full_name: string; phone?: string | null; email?: string | null }>;
 
-        const saved = await saveMessageRecord({
-          center_id: center.id,
-          group_id: selectedGroupId || null,
-          recipient_name: `Guruh: ${groupTitle}`,
-          channel,
-          message_type: 'announcement',
-          title: title.trim() || null,
-          content: content.trim(),
-        });
-
-        setHistory((prev) => [saved, ...prev]);
-        dispatchToChannel(channel, {}, content.trim(), title.trim());
-        toast(t('common.success'));
+        if (!list.length) {
+          toast('Guruhda faol o‘quvchi yo‘q', 'info');
+          return;
+        }
+        assertLimit(list.length);
+        const saved = await saveMessageBatch(
+          list.map((st) => ({
+            ...base,
+            message_type: 'announcement',
+            student_id: st.id,
+            group_id: selectedGroupId,
+            recipient_name: st.full_name,
+            recipient_phone: st.phone,
+            recipient_email: st.email,
+          }))
+        );
+        setHistory((prev) => [...saved, ...prev]);
+        toast(`${saved.length} ta o‘quvchiga xabar yuborildi`);
       } else {
-        // all active
-        const saved = await saveMessageRecord({
-          center_id: center.id,
-          recipient_name: `Barcha o'quvchilar (${students.length})`,
-          channel,
-          message_type: 'announcement',
-          title: title.trim() || null,
-          content: content.trim(),
-        });
-
-        setHistory((prev) => [saved, ...prev]);
-        dispatchToChannel(channel, {}, content.trim(), title.trim());
-        toast(t('common.success'));
+        const active = students.filter((s) => s.status === 'active');
+        if (!active.length) {
+          toast('Faol o‘quvchi yo‘q', 'info');
+          return;
+        }
+        assertLimit(active.length);
+        const saved = await saveMessageBatch(
+          active.map((st) => ({
+            ...base,
+            message_type: 'announcement',
+            student_id: st.id,
+            recipient_name: st.full_name,
+            recipient_phone: st.phone,
+            recipient_email: st.email,
+          }))
+        );
+        setHistory((prev) => [...saved, ...prev]);
+        toast(`${saved.length} ta o‘quvchiga xabar yuborildi`);
       }
 
       setContent('');
       setTitle('');
+      if (center?.id) {
+        const snap = await loadUsage(center.id, subscription);
+        setUsage(snap);
+      }
     } catch (err) {
       console.error(err);
-      toast(t('common.error'), 'error');
+      const msg = err instanceof Error ? err.message : t('common.error');
+      setPageError(msg);
+      toast(msg, 'error');
     } finally {
       setSending(false);
     }
@@ -270,13 +278,10 @@ export default function Messages() {
     const q = searchHistory.toLowerCase();
     return history.filter(
       (h) =>
-        h.recipient_name.toLowerCase().includes(q) ||
-        h.content.toLowerCase().includes(q) ||
-        h.channel.toLowerCase().includes(q)
+        (h.recipient_name || '').toLowerCase().includes(q) ||
+        (h.content || '').toLowerCase().includes(q)
     );
   }, [history, searchHistory]);
-
-  const channelBadge = (_ch: MessageChannel) => <span className="badge badge-info">Ilova</span>;
 
   if (loading) {
     return (
@@ -289,7 +294,6 @@ export default function Messages() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-      {/* Top Header */}
       <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 16 }}>
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--color-primary)', fontSize: 'var(--text-xs)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
@@ -299,12 +303,32 @@ export default function Messages() {
             {t('messages.title')}
           </h1>
           <p style={{ color: 'var(--color-text-secondary)', fontSize: 'var(--text-sm)' }}>
-            {t('messages.subtitle')}
+            Xabar faqat ilova ichida yuboriladi. Ota-ona va o‘quvchi panelida ko‘rinadi.
           </p>
         </div>
+        {usage && (
+          <div className="badge badge-info">
+            Bugun: {usage.messagesUsedDay}
+            {usage.plan.maxMessagesDay != null && usage.plan.maxMessagesDay < 999999
+              ? ` / ${usage.plan.maxMessagesDay}`
+              : ''}
+          </div>
+        )}
       </div>
 
-      {/* Main Composer Card */}
+      {pageError && (
+        <div className="card" style={{ padding: 14, borderColor: 'var(--color-danger, #ef4444)', display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+          <AlertCircle size={18} />
+          <div>
+            <strong>Xatolik</strong>
+            <p style={{ margin: '4px 0 0', fontSize: 13, color: 'var(--color-text-secondary)' }}>{pageError}</p>
+            <p style={{ margin: '6px 0 0', fontSize: 12, color: 'var(--color-text-muted)' }}>
+              Agar 403 bo‘lsa: Supabase SQL Editor da <code>FIX_RLS_NOW.sql</code> ni ishga tushiring.
+            </p>
+          </div>
+        </div>
+      )}
+
       <div className="card" style={{ padding: '24px 20px', borderRadius: 20, boxShadow: 'var(--shadow-sm)' }}>
         <h2 style={{ fontSize: 'var(--text-lg)', fontWeight: 700, marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8 }}>
           <Send size={18} color="var(--color-primary)" />
@@ -312,54 +336,32 @@ export default function Messages() {
         </h2>
 
         <form onSubmit={handleSend} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-          {/* Target audience selection */}
           <div>
             <label className="input-label" style={{ marginBottom: 8 }}>{t('messages.recipientType')}</label>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 8 }}>
-              <button
-                type="button"
-                className={`btn btn-sm ${targetType === 'single' ? 'btn-primary' : 'btn-secondary'}`}
-                onClick={() => setTargetType('single')}
-              >
+              <button type="button" className={`btn btn-sm ${targetType === 'single' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setTargetType('single')}>
                 {t('messages.singleStudent')}
               </button>
-              <button
-                type="button"
-                className={`btn btn-sm ${targetType === 'group' ? 'btn-primary' : 'btn-secondary'}`}
-                onClick={() => setTargetType('group')}
-              >
+              <button type="button" className={`btn btn-sm ${targetType === 'group' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setTargetType('group')}>
                 {t('messages.groupStudents')}
               </button>
               <button
                 type="button"
                 className={`btn btn-sm ${targetType === 'debtors' ? 'btn-primary' : 'btn-secondary'}`}
-                onClick={() => {
-                  setTargetType('debtors');
-                  setMessageType('debt_reminder');
-                }}
+                onClick={() => { setTargetType('debtors'); setMessageType('debt_reminder'); }}
               >
                 {t('messages.debtorsOnly')} ({debtors.length})
               </button>
-              <button
-                type="button"
-                className={`btn btn-sm ${targetType === 'all' ? 'btn-primary' : 'btn-secondary'}`}
-                onClick={() => setTargetType('all')}
-              >
+              <button type="button" className={`btn btn-sm ${targetType === 'all' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setTargetType('all')}>
                 {t('messages.allActive')} ({students.filter((s) => s.status === 'active').length})
               </button>
             </div>
           </div>
 
-          {/* Conditional Dropdown for single / group */}
           {targetType === 'single' && (
             <div className="input-group">
               <label className="input-label">{t('messages.selectStudent')} *</label>
-              <select
-                className="input"
-                value={selectedStudentId}
-                onChange={(e) => setSelectedStudentId(e.target.value)}
-                required
-              >
+              <select className="input" value={selectedStudentId} onChange={(e) => setSelectedStudentId(e.target.value)} required>
                 <option value="">— {t('messages.selectStudent')} —</option>
                 {students.map((s) => (
                   <option key={s.id} value={s.id}>
@@ -373,26 +375,16 @@ export default function Messages() {
           {targetType === 'group' && (
             <div className="input-group">
               <label className="input-label">{t('messages.selectGroup')} *</label>
-              <select
-                className="input"
-                value={selectedGroupId}
-                onChange={(e) => setSelectedGroupId(e.target.value)}
-                required
-              >
+              <select className="input" value={selectedGroupId} onChange={(e) => setSelectedGroupId(e.target.value)} required>
                 <option value="">— {t('messages.selectGroup')} —</option>
                 {groups.map((g) => (
-                  <option key={g.id} value={g.id}>
-                    {g.name}
-                  </option>
+                  <option key={g.id} value={g.id}>{g.name}</option>
                 ))}
               </select>
             </div>
           )}
 
-          {/* Channel Selector */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
-            
-
             <div className="input-group">
               <label className="input-label">{t('messages.messageType')}</label>
               <select className="input" value={messageType} onChange={(e) => setMessageType(e.target.value as MessageType)}>
@@ -403,55 +395,27 @@ export default function Messages() {
                 <option value="general">{t('messages.general')}</option>
               </select>
             </div>
-
             <div className="input-group">
               <label className="input-label">{t('messages.template')}</label>
               <select className="input" defaultValue="" onChange={(e) => e.target.value && applyTemplate(e.target.value)}>
                 <option value="">{t('messages.selectTemplate')}</option>
                 {templates.map((tpl) => (
-                  <option key={tpl.id} value={tpl.id}>
-                    {tpl.label}
-                  </option>
+                  <option key={tpl.id} value={tpl.id}>{tpl.label}</option>
                 ))}
               </select>
             </div>
           </div>
 
-          {/* Title (for Email/announcement) */}
-          {false && channel === 'email' && (
-            <div className="input-group">
-              <label className="input-label">{t('messages.messageTitle')}</label>
-              <input
-                className="input"
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                placeholder="Mavzu..."
-              />
-            </div>
-          )}
+          <div className="input-group">
+            <label className="input-label">Sarlavha</label>
+            <input className="input" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Ixtiyoriy sarlavha" />
+          </div>
 
-          {/* Message Content & AI Generator */}
           <div className="input-group">
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
               <label className="input-label" style={{ marginBottom: 0 }}>{t('messages.messageContent')} *</label>
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm"
-                onClick={handleAiGenerate}
-                disabled={generatingAi}
-                style={{ color: 'var(--color-primary)', fontWeight: 600, gap: 6 }}
-              >
-                {generatingAi ? (
-                  <>
-                    <Loader2 size={14} className="animate-spin" />
-                    {t('messages.generating')}
-                  </>
-                ) : (
-                  <>
-                    <Sparkles size={14} />
-                    {t('messages.generateWithAi')}
-                  </>
-                )}
+              <button type="button" className="btn btn-ghost btn-sm" onClick={handleAiGenerate} disabled={generatingAi} style={{ color: 'var(--color-primary)', fontWeight: 600, gap: 6 }}>
+                {generatingAi ? (<><Loader2 size={14} className="animate-spin" />{t('messages.generating')}</>) : (<><Sparkles size={14} />{t('messages.generateWithAi')}</>)}
               </button>
             </div>
             <textarea
@@ -465,50 +429,26 @@ export default function Messages() {
             />
           </div>
 
-          {/* Send Button */}
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
             <button type="submit" className="btn btn-primary" disabled={sending || !content.trim()}>
-              {sending ? (
-                <>
-                  <Loader2 size={16} className="animate-spin" />
-                  {t('messages.sending')}
-                </>
-              ) : (
-                <>
-                  <Send size={16} />
-                  {t('messages.sendAction')}
-                </>
-              )}
+              {sending ? (<><Loader2 size={16} className="animate-spin" />{t('messages.sending')}</>) : (<><Send size={16} />{t('messages.sendAction')}</>)}
             </button>
           </div>
         </form>
       </div>
 
-      {/* Sent Message History */}
       <div className="card" style={{ padding: '24px 20px', borderRadius: 20 }}>
         <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 16 }}>
           <h2 style={{ fontSize: 'var(--text-lg)', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 8 }}>
             <Clock size={18} color="var(--color-primary)" />
             {t('messages.history')} ({history.length})
           </h2>
-
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <div style={{ position: 'relative', width: 200, maxWidth: '100%' }}>
               <Search size={14} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--color-text-muted)' }} />
-              <input
-                className="input"
-                style={{ paddingLeft: 30, paddingBlock: 6, fontSize: 'var(--text-xs)' }}
-                placeholder={t('common.search')}
-                value={searchHistory}
-                onChange={(e) => setSearchHistory(e.target.value)}
-              />
+              <input className="input" style={{ paddingLeft: 30, paddingBlock: 6, fontSize: 'var(--text-xs)' }} placeholder={t('common.search')} value={searchHistory} onChange={(e) => setSearchHistory(e.target.value)} />
             </div>
-            <button
-              className="btn btn-ghost btn-sm"
-              onClick={refreshHistory}
-              disabled={historyLoading}
-              aria-label="Refresh history"
-            >
+            <button className="btn btn-ghost btn-sm" onClick={refreshHistory} disabled={historyLoading} aria-label="Refresh history">
               <RefreshCw size={15} className={historyLoading ? 'animate-spin' : ''} />
             </button>
           </div>
@@ -517,9 +457,7 @@ export default function Messages() {
         {filteredHistory.length === 0 ? (
           <div className="empty-state" style={{ padding: '28px 16px' }}>
             <MessageSquare size={36} color="var(--color-text-muted)" />
-            <p style={{ color: 'var(--color-text-secondary)', fontSize: 'var(--text-sm)' }}>
-              {t('messages.emptyHistory')}
-            </p>
+            <p style={{ color: 'var(--color-text-secondary)', fontSize: 'var(--text-sm)' }}>{t('messages.emptyHistory')}</p>
           </div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -538,36 +476,17 @@ export default function Messages() {
               >
                 <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <strong style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text)' }}>
-                      {item.recipient_name}
-                    </strong>
-                    {channelBadge(item.channel)}
+                    <strong style={{ fontSize: 'var(--text-sm)' }}>{item.recipient_name}</strong>
+                    <span className="badge badge-info">Ilova</span>
                   </div>
                   <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)' }}>
                     {new Date(item.created_at).toLocaleString(i18n.language)}
                   </span>
                 </div>
-
+                {item.title && <div style={{ fontWeight: 650, fontSize: 13 }}>{item.title}</div>}
                 <p style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)', margin: 0, whiteSpace: 'pre-wrap' }}>
                   {item.content}
                 </p>
-
-                {item.recipient_phone && (
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 4 }}>
-                    <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)' }}>
-                      {item.recipient_phone}
-                    </span>
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-sm"
-                      onClick={() => dispatchToChannel(item.channel, { phone: item.recipient_phone, email: item.recipient_email }, item.content)}
-                      style={{ fontSize: 'var(--text-xs)', gap: 4 }}
-                    >
-                      <ExternalLink size={12} />
-                      {t('messages.openApp')}
-                    </button>
-                  </div>
-                )}
               </div>
             ))}
           </div>

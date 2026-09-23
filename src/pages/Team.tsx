@@ -124,11 +124,11 @@ export default function Team() {
         </div>
         <div className="input-group">
           <label className="input-label">Email</label>
-          <input className="input" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
+          <input className="input" type="email" autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} required />
         </div>
         <div className="input-group">
           <label className="input-label">Parol (min 6)</label>
-          <input className="input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} required minLength={6} />
+          <input className="input" type="password" autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} required minLength={6} />
         </div>
         <div className="input-group">
           <label className="input-label">Rol</label>
