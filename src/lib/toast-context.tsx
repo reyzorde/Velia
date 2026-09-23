@@ -1,63 +1,41 @@
-import {
-  createContext,
-  useContext,
-  useState,
-  useCallback,
-  type ReactNode,
-} from 'react';
-import { X, CheckCircle, AlertCircle } from 'lucide-react';
+import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from 'react';
 
-type ToastType = 'success' | 'error';
+type ToastType = 'success' | 'error' | 'info';
 
-interface Toast {
+type ToastItem = {
   id: number;
   message: string;
   type: ToastType;
-}
+};
 
-interface ToastContextValue {
+type ToastContextValue = {
   toast: (message: string, type?: ToastType) => void;
-}
+};
 
-const ToastContext = createContext<ToastContextValue | undefined>(undefined);
+const ToastContext = createContext<ToastContextValue | null>(null);
 
 let toastId = 0;
 
 export function ToastProvider({ children }: { children: ReactNode }) {
-  const [toasts, setToasts] = useState<Toast[]>([]);
+  const [items, setItems] = useState<ToastItem[]>([]);
 
   const toast = useCallback((message: string, type: ToastType = 'success') => {
     const id = ++toastId;
-    setToasts((prev) => [...prev, { id, message, type }]);
-    setTimeout(() => {
-      setToasts((prev) => prev.filter((t) => t.id !== id));
-    }, 3500);
+    setItems((prev) => [...prev, { id, message, type }]);
+    window.setTimeout(() => {
+      setItems((prev) => prev.filter((t) => t.id !== id));
+    }, 3200);
   }, []);
 
-  const remove = (id: number) => {
-    setToasts((prev) => prev.filter((t) => t.id !== id));
-  };
+  const value = useMemo(() => ({ toast }), [toast]);
 
   return (
-    <ToastContext.Provider value={{ toast }}>
+    <ToastContext.Provider value={value}>
       {children}
-      <div className="toast-container" role="status" aria-live="polite">
-        {toasts.map((t) => (
+      <div className="toast-stack" aria-live="polite">
+        {items.map((t) => (
           <div key={t.id} className={`toast toast-${t.type}`}>
-            {t.type === 'success' ? (
-              <CheckCircle size={18} color="var(--color-success)" />
-            ) : (
-              <AlertCircle size={18} color="var(--color-danger)" />
-            )}
-            <span style={{ flex: 1 }}>{t.message}</span>
-            <button
-              className="btn btn-ghost btn-sm"
-              onClick={() => remove(t.id)}
-              aria-label="Close"
-              style={{ padding: 4 }}
-            >
-              <X size={14} />
-            </button>
+            {t.message}
           </div>
         ))}
       </div>

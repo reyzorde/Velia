@@ -1,6 +1,6 @@
 export type Language = 'uz' | 'ru' | 'en';
 export type Theme = 'light' | 'dark';
-export type Role = 'owner' | 'admin' | 'teacher';
+export type Role = 'owner' | 'admin' | 'administrator' | 'teacher';
 export type StudentStatus = 'active' | 'inactive';
 export type GroupStatus = 'active' | 'inactive' | 'archived';
 export type AttendanceStatus = 'present' | 'absent' | 'late' | 'excused';
@@ -118,4 +118,31 @@ export interface DashboardStats {
   today_attendance: number;
   month_revenue: number;
   debtors_count: number;
+}
+
+export type MessageChannel = 'in_app' | 'sms' | 'email' | 'telegram';
+export type MessageType =
+  | 'general'
+  | 'debt_reminder'
+  | 'attendance'
+  | 'payment'
+  | 'announcement'
+  | 'custom';
+export type MessageStatus = 'draft' | 'sent' | 'failed' | 'pending';
+
+export interface StudentMessage {
+  id: string;
+  center_id: string;
+  student_id: string | null;
+  group_id: string | null;
+  recipient_name: string;
+  recipient_phone: string | null;
+  recipient_email: string | null;
+  channel: MessageChannel;
+  message_type: MessageType;
+  title: string | null;
+  content: string;
+  status: MessageStatus;
+  sent_by: string | null;
+  created_at: string;
 }
