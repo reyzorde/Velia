@@ -15,7 +15,7 @@ interface AuthState {
   profile: Profile | null;
   center: Center | null;
   subscription: CenterSubscription | null;
-  role: 'owner' | 'admin' | 'teacher' | null;
+  role: 'owner' | 'admin' | 'administrator' | 'teacher' | null;
   isOwner: boolean;
   isTeacher: boolean;
   canManageStructure: boolean;
@@ -32,7 +32,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [center, setCenter] = useState<Center | null>(null);
   const [subscription, setSubscription] = useState<CenterSubscription | null>(null);
-  const [role, setRole] = useState<'owner' | 'admin' | 'teacher' | null>(null);
+  const [role, setRole] = useState<'owner' | 'admin' | 'administrator' | 'teacher' | null>(null);
   const [loading, setLoading] = useState(true);
 
   const loadUserData = async (userId: string) => {
@@ -83,7 +83,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         .maybeSingle();
 
       if (memberData?.centers) {
-        setRole((memberData.role as 'owner' | 'admin' | 'teacher') || null);
+        setRole((memberData.role as 'owner' | 'admin' | 'administrator' | 'teacher') || null);
         const c = Array.isArray(memberData.centers)
           ? memberData.centers[0]
           : memberData.centers;
