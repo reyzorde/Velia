@@ -60,7 +60,6 @@ export async function loadUsage(centerId: string, subscription: CenterSubscripti
     Promise.resolve(Number(localStorage.getItem(`velia_ai_${centerId}_${dayKey}`) || '0')),
   ]);
 
-  // Try RPC if available
   try {
     const { data } = await supabase.rpc('get_center_limits', { p_center_id: centerId });
     if (data && typeof data === 'object') {
