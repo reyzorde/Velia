@@ -44,34 +44,33 @@ export async function loadUsage(centerId: string, subscription: CenterSubscripti
   const dayKey = new Date().toISOString().slice(0, 10);
 
   const [students, groups, courses, mockCreated, messages, aiLocal] = await Promise.all([
-    supabase.from('students').select('*', { count: 'exact', head: true }).eq('center_id', centerId).eq('status', 'active'),
-    supabase.from('groups').select('*', { count: 'exact', head: true }).eq('center_id', centerId).eq('status', 'active'),
-    supabase.from('courses').select('*', { count: 'exact', head: true }).eq('center_id', centerId),
+    supabase.from('students').select('id').eq('center_id', centerId).eq('status', 'active'),
+    supabase.from('groups').select('id').eq('center_id', centerId).eq('status', 'active'),
+    supabase.from('courses').select('id').eq('center_id', centerId),
     supabase
       .from('mock_tests')
-      .select('*', { count: 'exact', head: true })
+      .select('id')
       .eq('center_id', centerId)
       .gte('created_at', `${monthKey}-01T00:00:00.000Z`),
     supabase
       .from('student_messages')
-      .select('*', { count: 'exact', head: true })
+      .select('id')
       .eq('center_id', centerId)
       .gte('created_at', `${dayKey}T00:00:00.000Z`),
     Promise.resolve(Number(localStorage.getItem(`velia_ai_${centerId}_${dayKey}`) || '0')),
   ]);
 
-  // Try RPC if available
   try {
     const { data } = await supabase.rpc('get_center_limits', { p_center_id: centerId });
     if (data && typeof data === 'object') {
       const d = data as Record<string, unknown>;
       return {
         plan: getPlan(String(d.plan_id || resolvePlanId(subscription))),
-        studentsUsed: Number(d.used_students ?? students.count ?? 0),
-        groupsUsed: Number(d.used_groups ?? groups.count ?? 0),
-        coursesUsed: Number(d.used_courses ?? courses.count ?? 0),
-        mockUsedMonth: Number(d.used_mock_tests_month ?? mockCreated.count ?? 0),
-        messagesUsedDay: Number(d.used_messages_day ?? messages.count ?? 0),
+        studentsUsed: Number(d.used_students ?? students.data?.length ?? 0),
+        groupsUsed: Number(d.used_groups ?? groups.data?.length ?? 0),
+        coursesUsed: Number(d.used_courses ?? courses.data?.length ?? 0),
+        mockUsedMonth: Number(d.used_mock_tests_month ?? mockCreated.data?.length ?? 0),
+        messagesUsedDay: Number(d.used_messages_day ?? messages.data?.length ?? 0),
         aiUsedDay: Number(d.used_ai_messages_day ?? aiLocal),
       };
     }
@@ -81,11 +80,11 @@ export async function loadUsage(centerId: string, subscription: CenterSubscripti
 
   return {
     plan,
-    studentsUsed: students.count ?? 0,
-    groupsUsed: groups.count ?? 0,
-    coursesUsed: courses.count ?? 0,
-    mockUsedMonth: mockCreated.count ?? 0,
-    messagesUsedDay: messages.count ?? 0,
+    studentsUsed: students.data?.length ?? 0,
+    groupsUsed: groups.data?.length ?? 0,
+    coursesUsed: courses.data?.length ?? 0,
+    mockUsedMonth: mockCreated.data?.length ?? 0,
+    messagesUsedDay: messages.data?.length ?? 0,
     aiUsedDay: aiLocal,
   };
 }
