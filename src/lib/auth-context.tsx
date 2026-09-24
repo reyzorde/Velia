@@ -127,16 +127,41 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   useEffect(() => {
-    supabase.auth.getSession().then(async ({ data: { session: s }, error }) => {
-      if (error) await supabase.auth.signOut({ scope: 'local' });
-      setSession(s);
-      setUser(s?.user ?? null);
-      if (s?.user) {
-        loadUserData(s.user.id).finally(() => setLoading(false));
-      } else {
-        setLoading(false);
-      }
-    });
+    let cancelled = false;
+    // Never leave the app stuck on a white/loader screen
+    const safety = window.setTimeout(() => {
+      if (!cancelled) setLoading(false);
+    }, 8000);
+
+    supabase.auth
+      .getSession()
+      .then(async ({ data: { session: s }, error }) => {
+        if (cancelled) return;
+        if (error) {
+          try {
+            await supabase.auth.signOut({ scope: 'local' });
+          } catch {
+            /* ignore */
+          }
+        }
+        setSession(s);
+        setUser(s?.user ?? null);
+        if (s?.user) {
+          try {
+            await loadUserData(s.user.id);
+          } catch (err) {
+            console.error('loadUserData failed', err);
+          }
+        }
+        if (!cancelled) setLoading(false);
+      })
+      .catch((err) => {
+        console.error('getSession failed', err);
+        if (!cancelled) setLoading(false);
+      })
+      .finally(() => {
+        window.clearTimeout(safety);
+      });
 
     const {
       data: { subscription: authSub },
@@ -144,7 +169,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setSession(s);
       setUser(s?.user ?? null);
       if (s?.user) {
-        loadUserData(s.user.id);
+        void loadUserData(s.user.id).catch((err) =>
+          console.error('loadUserData failed', err)
+        );
       } else {
         setProfile(null);
         setCenter(null);
@@ -153,7 +180,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     });
 
-    return () => authSub.unsubscribe();
+    return () => {
+      cancelled = true;
+      window.clearTimeout(safety);
+      authSub.unsubscribe();
+    };
   }, []);
 
   const signOut = async () => {

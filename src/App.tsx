@@ -28,9 +28,21 @@ const hasPendingOtpVerification = () =>
       localStorage.getItem('velia_otp_verification')
   );
 
+function AuthBootSpinner() {
+  return (
+    <div
+      className="auth-boot"
+      style={{ display: 'grid', placeItems: 'center', minHeight: '40vh' }}
+      aria-busy="true"
+    >
+      <div className="muted">Yuklanmoqda…</div>
+    </div>
+  );
+}
+
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
-  if (loading) return null;
+  if (loading) return <AuthBootSpinner />;
   if (!user) return <Navigate to="/login" replace />;
   if (hasPendingOtpVerification()) return <Navigate to="/signup" replace />;
   return <>{children}</>;
@@ -38,7 +50,7 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 
 function PublicRoute({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
-  if (loading) return null;
+  if (loading) return <AuthBootSpinner />;
   if (user && hasPendingOtpVerification()) return <>{children}</>;
   if (user) return <Navigate to="/dashboard" replace />;
   return <>{children}</>;
@@ -46,7 +58,7 @@ function PublicRoute({ children }: { children: React.ReactNode }) {
 
 function RootEntry() {
   const { user, loading } = useAuth();
-  if (loading) return null;
+  if (loading) return <AuthBootSpinner />;
   if (user && hasPendingOtpVerification()) return <Navigate to="/signup" replace />;
   if (user) return <Navigate to="/dashboard" replace />;
   return <Landing />;
@@ -60,14 +72,15 @@ export default function App() {
     setShowLoader(false);
   }, []);
 
-  const stillLoading = showLoader || authLoading;
+  // Brand intro only — never block the whole app forever on auth
+  const stillLoading = showLoader;
 
   return (
     <>
       {stillLoading && (
         <LoadingScreen
           onComplete={handleLoaderDone}
-          minDuration={1800}
+          minDuration={1500}
           waitForReady
           ready={!authLoading}
         />
